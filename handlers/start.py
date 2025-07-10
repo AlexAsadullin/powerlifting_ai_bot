@@ -1,20 +1,23 @@
 from aiogram import Dispatcher, types
 from database import Session
-from models.user import User
+from models.users import Student
 
 async def start_command(message: types.Message):
     session = Session()
     try:
-        # Проверка, есть ли пользователь в БД
-        user = session.query(User).filter_by(telegram_id=str(message.from_user.id)).first()
-        if not user:
-            # Создание нового пользователя
-            user = User(telegram_id=str(message.from_user.id), name=message.from_user.first_name)
-            session.add(user)
+        student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
+        if not student:
+            # Создание нового студента
+            student = Student(
+                telegram_id=str(message.from_user.id),
+                username=message.from_user.username,
+                name=message.from_user.first_name
+            )
+            session.add(student)
             session.commit()
-        await message.reply(f"Привет, {user.name}! Я бот для персональных тренировок. Напиши /start для начала.")
+        await message.reply(f"Привет, {student.name}! Я  Руслана Сидорова для персональных тренировок. Напиши /start чтобы начать.")
     finally:
         session.close()
 
 def register_handlers(dp: Dispatcher):
-    dp.register_message_handler(start_command, commands=['start'])
+    dp.message(commands=['start'])(start_command)
