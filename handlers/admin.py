@@ -1,3 +1,4 @@
+import os
 from aiogram import Router, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -47,8 +48,65 @@ async def handle_group_name(message: types.Message, state: FSMContext):
         group = Group(name=group_name, trainer_id=trainer.id)
         session.add(group)
         session.commit()
-        await state.update_data(group_id=group.id)  # Сохраняем ID группы
-        # Показываем список учеников
+        await state.update_data(group_id=group.id)
+        await message.answer(f"Группа '{group_name}' создана. Введите расписание в свободной форме:")
+        await state.set_state(GroupCreation.waiting_for_schedule)
+    finally:
+        session.close()
+
+@router.message(GroupCreation.waiting_for_schedule)
+async def handle_group_schedule(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    schedule_content = message.text.strip()
+    if not schedule_content:
+        await message.answer("Расписание не может быть пустым. Пожалуйста, введите расписание:")
+        return
+    session = Session()
+    try:
+        data = await state.get_data()
+        group_id = data.get("group_id")
+        schedule = Schedule(group_id=group_id, content=schedule_content)
+        session.add(schedule)
+        session.commit()
+        await message.answer("Расписание сохранено. Теперь загрузите файл с программой тренировок (например, PDF или документ):")
+        await state.set_state(GroupCreation.waiting_for_program_file)
+    finally:
+        session.close()
+
+@router.message(GroupCreation.waiting_for_program_file, F.document)
+async def handle_program_file(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    document = message.document
+    session = Session()
+    try:
+        data = await state.get_data()
+        group_id = data.get("group_id")
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await message.answer("Ошибка: группа не найдена.")
+            await state.clear()
+            return
+
+        # Ensure uploads directory exists
+        upload_dir = "uploads"
+        if not os.path.exists(upload_dir):
+            os.makedirs(upload_dir)
+
+        # Generate unique file path
+        file_extension = document.file_name.split('.')[-1] if '.' in document.file_name else 'file'
+        file_path = os.path.join(upload_dir, f"group_{group_id}_program.{file_extension}")
+
+        # Download and save the file
+        file = await message.bot.get_file(document.file_id)
+        await message.bot.download_file(file.file_path, file_path)
+
+        # Save file path to group
+        group.program_file = file_path
+        session.commit()
+
+        # Proceed to student selection
         students = session.query(Student).all()
         if not students:
             await message.answer("Нет зарегистрированных учеников.")
@@ -58,10 +116,11 @@ async def handle_group_name(message: types.Message, state: FSMContext):
             [InlineKeyboardButton(text=f"{s.name or 'N/A'} (@{s.username or 'N/A'})", callback_data=f"add_student_{s.telegram_id}")]
             for s in students
         ])
-        await message.answer(f"Группа '{group_name}' создана. Выберите учеников для добавления:", reply_markup=keyboard)
+        await message.answer("Файл программы тренировок сохранен. Выберите учеников для добавления:", reply_markup=keyboard)
         await state.set_state(GroupCreation.waiting_for_students)
     finally:
         session.close()
+
 
 # Обработчик выбора учеников
 @router.callback_query(F.data.startswith("add_student_"))
@@ -122,26 +181,10 @@ async def create_schedule(message: types.Message):
             await message.answer("У вас нет групп. Создайте группу сначала.")
             return
         group_names = "\n".join([f"{g.id}: {g.name}" for g in groups])
-        await message.answer(f"Выберите группу (введите ID):\n{group_names}\nФормат расписания: ID группы, дата (ДД.ММ.ГГГГ), время (ЧЧ:ММ), описание")
+        await message.answer(f"Выберите группу (введите ID):\n{group_names}\nФормат: ID группы, расписание (в свободной форме)")
     finally:
         session.close()
 
-@router.message(lambda message: message.text.count(',') == 3)
-async def handle_schedule(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        group_id, date, time, description = [x.strip() for x in message.text.split(',')]
-        session = Session()
-        try:
-            schedule = Schedule(group_id=group_id, date=date, time=time, description=description)
-            session.add(schedule)
-            session.commit()
-            await message.answer(f"Расписание создано: {date} {time} - {description}")
-        finally:
-            session.close()
-    except ValueError:
-        await message.answer("Неверный формат. Используйте: ID группы, дата (ДД.ММ.ГГГГ), время (ЧЧ:ММ), описание")
 
 @router.message(F.text == "Просмотреть профили учеников")
 async def view_student_profiles(message: types.Message):
@@ -407,7 +450,7 @@ async def handle_change_schedule(callback: types.CallbackQuery):
             await callback.answer("Группа не найдена.")
             return
         await callback.message.edit_text(
-            f"Для добавления расписания для группы '{group.name}' (ID: {group_id}), отправьте сообщение в формате: {group_id}, дата (ДД.ММ.ГГГГ), время (ЧЧ:ММ), описание"
+            f"Напишите расписание для группы '{group.name}' в свободной форме - его обработает ИИ"
         )
     finally:
         session.close()
@@ -415,5 +458,4 @@ async def handle_change_schedule(callback: types.CallbackQuery):
 
 @router.message(F.text == "Вернуться в главное меню")
 async def back_to_main_menu(message: types.Message):
-    from handlers.start import get_main_menu
     await message.answer("Возвращаемся в главное меню:", reply_markup=get_admin_menu())

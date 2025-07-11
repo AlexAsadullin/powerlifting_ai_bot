@@ -38,12 +38,12 @@ class Schedule(Base):
     __tablename__ = 'schedules'
     id = Column(Integer, primary_key=True)
     group_id = Column(Integer, ForeignKey('groups.id'))
-    date = Column(String, nullable=False)
-    time = Column(String, nullable=False)
-    description = Column(String, nullable=True)
+    content = Column(String, nullable=False)
     group = relationship("Group")
 
 # Определяем состояния для создания группы
 class GroupCreation(StatesGroup):
-    waiting_for_name = State()  # Ожидание названия группы
-    waiting_for_students = State()  # Ожидание выбора учеников
+    waiting_for_name = State()
+    waiting_for_schedule = State()  # New state for schedule input
+    waiting_for_program_file = State()  # New state for file upload
+    waiting_for_students = State()
