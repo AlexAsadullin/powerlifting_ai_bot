@@ -174,15 +174,244 @@ async def view_groups(message: types.Message):
         if not groups:
             await message.answer("У вас нет созданных групп.")
             return
-        group_list = []
-        for g in groups:
-            # Получаем список учеников в группе
-            students = g.students
-            student_info = ", ".join([f"{s.name or 'N/A'} (@{s.username or 'N/A'})" for s in students]) if students else "Нет учеников"
-            group_list.append(f"ID: {g.id}, Название: {g.name}\nУченики: {student_info}")
-        await message.answer(f"Ваши группы:\n\n" + "\n\n".join(group_list))
+        buttons = [
+            [InlineKeyboardButton(text=g.name, callback_data=f"edit_group_{g.id}")]
+            for g in groups
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer("Выберите группу:", reply_markup=inline_keyboard)
     finally:
         session.close()
+
+@router.callback_query(F.data.startswith("edit_group_"))
+async def handle_edit_group(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        student_usernames = "\n".join([f"@{s.username or 'N/A'}" for s in group.students])
+        buttons = [
+            [InlineKeyboardButton(text="Изменить расписание", callback_data=f"change_schedule_{group_id}")],
+            [InlineKeyboardButton(text="Добавить учеников", callback_data=f"add_students_{group_id}")],
+            [InlineKeyboardButton(text="Удалить учеников", callback_data=f"remove_students_{group_id}")],
+            [InlineKeyboardButton(text="Удалить группу", callback_data=f"delete_group_{group_id}")],
+            [InlineKeyboardButton(text="Назад к списку групп", callback_data="back_to_groups")]
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(f"Редактирование группы '{group.name}':\nУченики:\n{student_usernames}", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_groups")
+async def handle_back_to_groups(callback: types.CallbackQuery):
+    session = Session()
+    try:
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if not trainer:
+            await callback.message.edit_text("Вы не зарегистрированы как тренер.")
+            return
+        groups = session.query(Group).filter_by(trainer_id=trainer.id).all()
+        if not groups:
+            await callback.message.edit_text("У вас нет созданных групп.")
+            return
+        buttons = [
+            [InlineKeyboardButton(text=g.name, callback_data=f"edit_group_{g.id}")]
+            for g in groups
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text("Выберите группу для редактирования:", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("delete_group_"))
+async def handle_delete_group(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        buttons = [
+            [InlineKeyboardButton(text="Да", callback_data=f"confirm_delete_{group_id}"),
+             InlineKeyboardButton(text="Нет", callback_data=f"edit_group_{group_id}")]
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(f"Вы уверены, что хотите удалить группу '{group.name}'?", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("confirm_delete_"))
+async def handle_confirm_delete(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        session.delete(group)
+        session.commit()
+        buttons = [
+            [InlineKeyboardButton(text="Назад к списку групп", callback_data="back_to_groups")]
+        ]
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(f"Группа '{group.name}' удалена.", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("add_students_"))
+async def handle_add_students(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        students_not_in_group = session.query(Student).filter(~Student.groups.any(Group.id == group_id)).all()
+        if not students_not_in_group:
+            buttons = [
+                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+            ]
+            inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text("Нет учеников для добавления.", reply_markup=inline_keyboard)
+            return
+        buttons = [
+            [InlineKeyboardButton(text=f"{s.name or 'N/A'} (@{s.username or 'N/A'})", callback_data=f"add_student_to_group_{group_id}_{s.telegram_id}")]
+            for s in students_not_in_group
+        ]
+        buttons.append([InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")])
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text("Выберите ученика для добавления в группу:", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("add_student_to_group_"))
+async def handle_add_student_to_group(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    group_id = parts[4]
+    student_telegram_id = parts[5]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        student = session.query(Student).filter_by(telegram_id=student_telegram_id).first()
+        if not group or not student:
+            await callback.answer("Группа или ученик не найдены.")
+            return
+        if student in group.students:
+            await callback.answer("Ученик уже в группе.")
+            return
+        group.students.append(student)
+        session.commit()
+        await callback.message.edit_text(
+            f"Ученик {student.name or 'N/A'} добавлен в группу.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад к редактированию группы", callback_data=f"edit_group_{group_id}")]
+            ])
+        )
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("remove_students_"))
+async def handle_remove_students(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        students_in_group = group.students
+        if not students_in_group:
+            buttons = [
+                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+            ]
+            inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text("В группе нет учеников.", reply_markup=inline_keyboard)
+            return
+        buttons = [
+            [InlineKeyboardButton(text=f"{s.name or 'N/A'} (@{s.username or 'N/A'})", callback_data=f"remove_student_from_group_{group_id}_{s.telegram_id}")]
+            for s in students_in_group
+        ]
+        buttons.append([InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")])
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text("Выберите ученика для удаления из группы:", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("remove_student_from_group_"))
+async def handle_remove_student_from_group(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    group_id = parts[4]
+    student_telegram_id = parts[5]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        student = session.query(Student).filter_by(telegram_id=student_telegram_id).first()
+        if not group or not student:
+            await callback.answer("Группа или ученик не найдены.")
+            return
+        if student not in group.students:
+            await callback.answer("Ученик не в группе.")
+            return
+        group.students.remove(student)
+        session.commit()
+        await callback.message.edit_text(
+            f"Ученик {student.name or 'N/A'} удален из группы.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад к редактированию группы", callback_data=f"edit_group_{group_id}")]
+            ])
+        )
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("change_schedule_"))
+async def handle_change_schedule(callback: types.CallbackQuery):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        await callback.message.edit_text(
+            f"Для добавления расписания для группы '{group.name}' (ID: {group_id}), отправьте сообщение в формате: {group_id}, дата (ДД.ММ.ГГГГ), время (ЧЧ:ММ), описание"
+        )
+    finally:
+        session.close()
+    await callback.answer()
 
 @router.message(F.text == "Вернуться в главное меню")
 async def back_to_main_menu(message: types.Message):
