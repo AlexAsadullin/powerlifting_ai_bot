@@ -1,27 +1,32 @@
-from aiogram import Dispatcher, Router, types
-from aiogram.filters import Command
+from aiogram import Router, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.filters import Command
 from database import Session
-from models.users import Student
+from models.models import Student
+from handlers.admin import is_admin, get_admin_menu
 
 router = Router()
 
 # Функция для создания inline-клавиатуры
 def get_main_menu():
-    keyboard = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Занятия с тренером", callback_data="trainer_sessions")],
-        [KeyboardButton(text="График тренировок", callback_data="workout_schedule")],
-        [KeyboardButton(text="Программа тренировок", callback_data="workout_program")],
-        [KeyboardButton(text="Питание", callback_data="nutrition")],
-        [KeyboardButton(text="Прогресс", callback_data="progress")],
-        [KeyboardButton(text="База знаний", callback_data="knowledge_base")]
-    ])
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Занятия с тренером"), KeyboardButton(text="График тренировок")],
+            [KeyboardButton(text="Программа тренировок"), KeyboardButton(text="Питание")],
+            [KeyboardButton(text="Прогресс"), KeyboardButton(text="База знаний")]
+        ],
+        resize_keyboard=True,  # Adjusts keyboard size to fit the screen
+        one_time_keyboard=False  # Keyboard persists after interaction
+    )
     return keyboard
 
 @router.message(Command("start"))
 async def start_command(message: types.Message):
     session = Session()
     try:
+        if is_admin(str(message.from_user.id)):
+            await message.reply(f"Привет, {message.from_user.first_name}! Выбери команду", reply_markup=get_admin_menu())
+            return
         student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
         if not student:
             # Создание нового ученика
@@ -38,18 +43,38 @@ async def start_command(message: types.Message):
     finally:
         session.close()
 
-# Обработчик нажатий на кнопки
-@router.callback_query()
-async def handle_button_callback(callback_query: types.CallbackQuery):
-    callback_data = callback_query.data
-    responses = {
-        "trainer_sessions": "Вы выбрали занятия с тренером!",
-        "workout_schedule": "Вы выбрали график тренировок!",
-        "workout_program": "Вы выбрали программу тренировок!",
-        "nutrition": "Вы выбрали питание!",
-        "progress": "Вы выбрали прогресс!",
-        "knowledge_base": "Вы выбрали базу знаний!"
-    }
-    response = responses.get(callback_data, "Неизвестная команда")
-    await callback_query.message.answer(response)
-    await callback_query.answer()  # Подтверждение обработки callback
+@router.message(F.text == "Админ-панель")
+async def handle_admin_panel(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта функция доступна только тренеру.")
+        return
+    await message.answer("Добро пожаловать в админ-панель:", reply_markup=get_admin_menu())
+
+@router.message(F.text == "Занятия с тренером")
+async def handle_trainer_sessions(message: types.Message):
+    await message.answer("Вы выбрали: Занятия с тренером. Напишите, что вас интересует.")
+
+
+@router.message(F.text == "График тренировок")
+async def handle_training_schedule(message: types.Message):
+    await message.answer("Вы выбрали: График тренировок. Вот доступное расписание...")
+
+
+@router.message(F.text == "Программа тренировок")
+async def handle_training_program(message: types.Message):
+    await message.answer("Вы выбрали: Программа тренировок. Вот ваша программа...")
+
+
+@router.message(F.text == "Питание")
+async def handle_nutrition(message: types.Message):
+    await message.answer("Вы выбрали: Питание. Расскажите больше, чтобы я помог составить рацион.")
+
+
+@router.message(F.text == "Прогресс")
+async def handle_progress(message: types.Message):
+    await message.answer("Вы выбрали: Прогресс. Вот ваши последние результаты...")
+
+
+@router.message(F.text == "База знаний")
+async def handle_knowledge_base(message: types.Message):
+    await message.answer("Вы выбрали: База знаний. Вот полезные материалы для вас...")
