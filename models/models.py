@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+import datetime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float
 from sqlalchemy.orm import relationship
 from database import Base
 from aiogram.fsm.state import State, StatesGroup
@@ -9,6 +10,8 @@ class Student(Base):
     telegram_id = Column(String, unique=True, nullable=False)
     username = Column(String, nullable=True)
     name = Column(String, nullable=True)
+    remaining_sessions = Column(Integer, default=0)
+    payment_requests = relationship("PaymentRequest", back_populates="student")
 
 class Trainer(Base):
     __tablename__ = 'trainers'
@@ -17,7 +20,6 @@ class Trainer(Base):
     username = Column(String, nullable=True)
     name = Column(String, nullable=True)
 
-# Group model for storing student groups
 class Group(Base):
     __tablename__ = 'groups'
     id = Column(Integer, primary_key=True)
@@ -28,13 +30,11 @@ class Group(Base):
     trainer = relationship("Trainer")
     students = relationship("Student", secondary="group_students")
 
-# Junction table for group-student relationship
 class GroupStudent(Base):
     __tablename__ = 'group_students'
     group_id = Column(Integer, ForeignKey('groups.id'), primary_key=True)
     student_id = Column(Integer, ForeignKey('students.id'), primary_key=True)
 
-# Schedule model
 class Schedule(Base):
     __tablename__ = 'schedules'
     id = Column(Integer, primary_key=True)
@@ -42,9 +42,20 @@ class Schedule(Base):
     content = Column(String, nullable=False)
     group = relationship("Group")
 
-# Определяем состояния для создания группы
+class PaymentRequest(Base):
+    __tablename__ = 'payment_requests'
+    id = Column(Integer, primary_key=True)
+    student_id = Column(Integer, ForeignKey('students.id'))
+    sessions_requested = Column(Integer, nullable=False)
+    status = Column(String, default='pending')
+    screenshot_file_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.now)
+    updated_at = Column(DateTime, default=datetime.datetime.now)
+    student = relationship("Student", back_populates="payment_requests")
+
 class GroupCreation(StatesGroup):
     waiting_for_name = State()
-    waiting_for_schedule = State()  # New state for schedule input
-    waiting_for_program_file = State()  # New state for file upload
+    waiting_for_schedule = State()
+    waiting_for_program_file = State()
     waiting_for_students = State()
+
