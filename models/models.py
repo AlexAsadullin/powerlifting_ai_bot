@@ -10,7 +10,6 @@ class Student(Base):
     username = Column(String, nullable=True)
     name = Column(String, nullable=True)
 
-
 class Trainer(Base):
     __tablename__ = 'trainers'
     id = Column(Integer, primary_key=True)

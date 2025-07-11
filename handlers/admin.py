@@ -3,7 +3,7 @@ from aiogram import Router, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from database import Base, Session
-from models.models import Student, Trainer, Group, Schedule, GroupCreation
+from models.models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent
 
 router = Router()
 
@@ -197,10 +197,20 @@ async def view_student_profiles(message: types.Message):
         if not students:
             await message.answer("Нет зарегистрированных учеников.")
             return
-        profiles = "\n".join([f"ID: {s.telegram_id}, Username: @{s.username or 'N/A'}, Name: {s.name or 'N/A'}" for s in students])
-        await message.answer(f"Профили учеников:\n{profiles}")
+        profiles = []
+        for student in students:
+            # Query group_students to find groups for this student
+            group_ids = session.query(GroupStudent.group_id).filter_by(student_id=student.id).all()
+            group_ids = [gid[0] for gid in group_ids]  # Extract group IDs
+            # Fetch group names for the group IDs
+            group_names = ", ".join([g.name for g in session.query(Group).filter(Group.id.in_(group_ids)).all()]) if group_ids else "Нет групп"
+            profiles.append(f"ID: {student.telegram_id}, Username: @{student.username or 'N/A'}, Name: {student.name or 'N/A'}, Groups: {group_names}")
+        profiles_text = "\n".join(profiles)
+        await message.answer(f"Профили учеников:\n{profiles_text}")
     finally:
         session.close()
+
+
 
 @router.message(F.text == "Просмотреть список групп")
 async def view_groups(message: types.Message):
