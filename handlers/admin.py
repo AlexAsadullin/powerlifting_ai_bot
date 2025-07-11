@@ -2,10 +2,18 @@ import os
 from aiogram import Router, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
-from database import Base, Session
+from aiogram.fsm.state import State, StatesGroup
+from database import Session
 from models.models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent
 
 router = Router()
+
+class ChangeProgram(StatesGroup):
+    waiting_for_program_file = State()
+
+class ChangeSchedule(StatesGroup):
+    waiting_for_schedule = State()
+
 
 # Check if user is admin (trainer)
 def is_admin(telegram_id):
@@ -252,8 +260,9 @@ async def handle_edit_group(callback: types.CallbackQuery):
         student_usernames = "\n".join([f"@{s.username or 'N/A'}" for s in group.students])
         buttons = [
             [InlineKeyboardButton(text="Изменить расписание", callback_data=f"change_schedule_{group_id}")],
+            [InlineKeyboardButton(text="Изменить программу", callback_data=f"change_program_{group_id}")],
             [InlineKeyboardButton(text="Добавить учеников", callback_data=f"add_students_{group_id}")],
-            [InlineKeyboardButton(text="Удалить учеников", callback_data=f"remove_students_{group_id}")],
+            [InlineKeyboardButton(text="Удалить учеников из группы", callback_data=f"remove_students_{group_id}")],
             [InlineKeyboardButton(text="Удалить группу", callback_data=f"delete_group_{group_id}")],
             [InlineKeyboardButton(text="Назад к списку групп", callback_data="back_to_groups")]
         ]
@@ -331,6 +340,33 @@ async def handle_confirm_delete(callback: types.CallbackQuery):
     finally:
         session.close()
     await callback.answer()
+
+@router.callback_query(F.data.startswith("change_program_"))
+async def handle_change_program(callback: types.CallbackQuery, state: FSMContext):
+    group_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await callback.answer("Группа не найдена.")
+            return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        await callback.message.edit_text(
+            f"Загрузите новый файл программы тренировок для группы '{group.name}' (например, PDF или документ):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+            ])
+        )
+        await state.set_state(ChangeProgram.waiting_for_program_file)
+        await state.update_data(group_id=group_id)
+    finally:
+        session.close()
+    await callback.answer()
+
+
 
 @router.callback_query(F.data.startswith("add_students_"))
 async def handle_add_students(callback: types.CallbackQuery):
@@ -451,7 +487,7 @@ async def handle_remove_student_from_group(callback: types.CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data.startswith("change_schedule_"))
-async def handle_change_schedule(callback: types.CallbackQuery):
+async def handle_change_schedule(callback: types.CallbackQuery, state: FSMContext):
     group_id = callback.data.split("_")[-1]
     session = Session()
     try:
@@ -459,12 +495,60 @@ async def handle_change_schedule(callback: types.CallbackQuery):
         if not group:
             await callback.answer("Группа не найдена.")
             return
+        trainer = session.query(Trainer).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if group.trainer_id != trainer.id:
+            await callback.answer("У вас нет доступа к этой группе.")
+            return
+        schedule = session.query(Schedule).filter_by(group_id=group_id).first()
+        current_schedule = schedule.content if schedule else "Нет расписания"
         await callback.message.edit_text(
-            f"Напишите расписание для группы '{group.name}' в свободной форме - его обработает ИИ"
+            f"Введите новое расписание для группы '{group.name}' в свободной форме:\nТекущее расписание: {current_schedule}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+            ])
         )
+        await state.set_state(ChangeSchedule.waiting_for_schedule)
+        await state.update_data(group_id=group_id)
     finally:
         session.close()
     await callback.answer()
+
+# New handler for receiving the new schedule
+@router.message(ChangeSchedule.waiting_for_schedule)
+async def handle_new_schedule(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта функция доступна только тренерам.")
+        return
+    schedule_content = message.text.strip()
+    if not schedule_content:
+        await message.answer("Расписание не может быть пустым. Пожалуйста, введите расписание:")
+        return
+    session = Session()
+    try:
+        data = await state.get_data()
+        group_id = data.get("group_id")
+        group = session.query(Group).filter_by(id=group_id).first()
+        if not group:
+            await message.answer("Ошибка: группа не найдена.")
+            await state.clear()
+            return
+        schedule = session.query(Schedule).filter_by(group_id=group_id).first()
+        if schedule:
+            schedule.content = schedule_content
+        else:
+            schedule = Schedule(group_id=group_id, content=schedule_content)
+            session.add(schedule)
+        session.commit()
+        await message.answer(
+            f"Расписание для группы '{group.name}' обновлено.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад к редактированию группы", callback_data=f"edit_group_{group_id}")]
+            ])
+        )
+        await state.clear()
+    finally:
+        session.close()
+
 
 @router.message(F.text == "Вернуться в главное меню")
 async def back_to_main_menu(message: types.Message):

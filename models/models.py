@@ -23,6 +23,8 @@ class Group(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     trainer_id = Column(Integer, ForeignKey('trainers.id'))
+    schedule = Column(String, nullable=True)
+    program_file = Column(String, nullable=True)
     trainer = relationship("Trainer")
     students = relationship("Student", secondary="group_students")
 
