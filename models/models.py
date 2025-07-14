@@ -53,9 +53,18 @@ class PaymentRequest(Base):
     updated_at = Column(DateTime, default=datetime.datetime.now)
     student = relationship("Student", back_populates="payment_requests")
 
+class Progress(Base):
+    __tablename__ = 'progress'
+    id = Column(Integer, primary_key=True)
+    student_id = Column(Integer, ForeignKey('students.id'))
+    type = Column(String, nullable=False)  # 'training' or 'photo'
+    content = Column(String, nullable=True)  # for text messages
+    file_path = Column(String, nullable=True)  # for files
+    date = Column(DateTime, default=datetime.datetime.now)
+    student = relationship("Student")
+
 class GroupCreation(StatesGroup):
     waiting_for_name = State()
     waiting_for_schedule = State()
     waiting_for_program_file = State()
     waiting_for_students = State()
-
