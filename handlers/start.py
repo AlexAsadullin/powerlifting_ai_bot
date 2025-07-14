@@ -1,15 +1,18 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-import time
 import datetime
-import os
 from aiogram import Router, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import FSInputFile
 from aiogram.filters import Command
 from database import Session
 from models.models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress
 from handlers.admin import is_admin, get_admin_menu
+import os
+import time
+import zipfile
+import tempfile
 
 router = Router()
 
@@ -28,7 +31,6 @@ class ProgressStates(StatesGroup):
     waiting_for_photo = State()
 
 
-# Функция для создания inline-клавиатуры
 def get_main_menu():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -36,8 +38,8 @@ def get_main_menu():
             [KeyboardButton(text="Программа тренировок"), KeyboardButton(text="Питание")],
             [KeyboardButton(text="Прогресс"), KeyboardButton(text="База знаний")]
         ],
-        resize_keyboard=True,  # Adjusts keyboard size to fit the screen
-        one_time_keyboard=False  # Keyboard persists after interaction
+        resize_keyboard=True,
+        one_time_keyboard=False
     )
     return keyboard
 
@@ -46,6 +48,9 @@ def get_progress_menu():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="загрузить тренировку", callback_data="upload_training")],
         [InlineKeyboardButton(text="загрузить фото", callback_data="upload_photo")],
+        [InlineKeyboardButton(text="просмотреть историю тренировок", callback_data="view_training_history")],
+        [InlineKeyboardButton(text="посмотреть историю фото", callback_data="view_photo_history")],
+        [InlineKeyboardButton(text="ии-обзор истории тренировок", callback_data="ai_review")],
         [InlineKeyboardButton(text="назад", callback_data="back_to_main")]
     ])
     return keyboard
@@ -61,7 +66,6 @@ async def start_command(message: types.Message):
             return
         student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
         if not student:
-            # Создание нового ученика
             student = Student(
                 telegram_id=str(message.from_user.id),
                 username=message.from_user.username,
@@ -96,7 +100,6 @@ async def handle_trainer_sessions(message: types.Message, state: FSMContext):
         session.close()
 
 
-# Updated handler to accept both photos and documents for screenshot
 @router.message(F.photo | F.document, PaymentStates.waiting_for_screenshot)
 async def handle_screenshot(message: types.Message, state: FSMContext):
     file_id = None
@@ -112,7 +115,6 @@ async def handle_screenshot(message: types.Message, state: FSMContext):
     await state.set_state(PaymentStates.waiting_for_sessions)
 
 
-# Updated handler to send either photo or document to trainer
 @router.message(F.text, PaymentStates.waiting_for_sessions)
 async def handle_sessions(message: types.Message, state: FSMContext):
     try:
@@ -138,7 +140,6 @@ async def handle_sessions(message: types.Message, state: FSMContext):
         )
         session.add(payment_request)
         session.commit()
-        # Notify trainer with appropriate file type
         trainer = session.query(Trainer).first()
         if trainer:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -182,7 +183,6 @@ async def handle_approve(callback: types.CallbackQuery):
         payment_request.status = 'approved'
         payment_request.updated_at = datetime.datetime.now()
         session.commit()
-        # Edit the caption of the photo/document message
         await callback.message.edit_caption(
             caption="Платеж одобрен.",
             reply_markup=None
@@ -196,7 +196,6 @@ async def handle_approve(callback: types.CallbackQuery):
         session.close()
 
 
-# Updated handler to edit caption instead of text for photo/document messages
 @router.callback_query(F.data.startswith("reject_"))
 async def handle_reject(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -212,7 +211,6 @@ async def handle_reject(callback: types.CallbackQuery):
         payment_request.status = 'rejected'
         payment_request.updated_at = datetime.datetime.now()
         session.commit()
-        # Edit the caption of the photo/document message
         await callback.message.edit_caption(
             caption="Платеж отклонен.",
             reply_markup=None
@@ -226,7 +224,6 @@ async def handle_reject(callback: types.CallbackQuery):
         session.close()
 
 
-# Updated handler to display training schedules for student's groups
 @router.message(F.text == "График тренировок")
 async def handle_training_schedule(message: types.Message):
     session = Session()
@@ -235,7 +232,6 @@ async def handle_training_schedule(message: types.Message):
         if not student:
             await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
             return
-        # Query groups through GroupStudent junction table
         groups = session.query(Group).join(GroupStudent).filter(GroupStudent.student_id == student.id).all()
         if not groups:
             await message.answer("Вы не состоите ни в одной группе.")
@@ -250,7 +246,6 @@ async def handle_training_schedule(message: types.Message):
         session.close()
 
 
-# Updated handler to select and send training program file
 @router.message(F.text == "Программа тренировок")
 async def handle_training_program(message: types.Message, state: FSMContext):
     session = Session()
@@ -259,14 +254,12 @@ async def handle_training_program(message: types.Message, state: FSMContext):
         if not student:
             await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
             return
-        # Query groups through GroupStudent junction table
         groups = session.query(Group).join(GroupStudent).filter(GroupStudent.student_id == student.id).all()
         if not groups:
             await message.answer("Вы не состоите ни в одной группе.")
             return
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=g.name, callback_data=f"select_program_{g.id}")]
-            for g in groups
+            [InlineKeyboardButton(text=g.name, callback_data=f"select_program_{g.id}")] for g in groups
         ])
         await message.answer("Выберите группу, чтобы получить программу тренировок:", reply_markup=keyboard)
         await state.set_state(ProgramSelection.waiting_for_group)
@@ -274,7 +267,6 @@ async def handle_training_program(message: types.Message, state: FSMContext):
         session.close()
 
 
-# Handler for group selection to send program file
 @router.callback_query(F.data.startswith("select_program_"))
 async def handle_program_selection(callback: types.CallbackQuery, state: FSMContext):
     group_id = callback.data.split("_")[-1]
@@ -287,7 +279,7 @@ async def handle_program_selection(callback: types.CallbackQuery, state: FSMCont
         if not group.program_file:
             await callback.answer("Для этой группы не загружена программа тренировок.")
             return
-        await callback.message.delete()  # Remove the group selection message
+        await callback.message.delete()
         await callback.message.answer_document(
             document=types.FSInputFile(path=group.program_file),
             caption=f"Программа тренировок для группы '{group.name}'"
@@ -393,6 +385,119 @@ async def handle_photo(message: types.Message, state: FSMContext):
         await state.clear()
     finally:
         session.close()
+
+
+@router.callback_query(F.data == "view_training_history")
+async def handle_view_training_history(callback: types.CallbackQuery):
+    session = Session()
+    try:
+        student = session.query(Student).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if not student:
+            await callback.answer("Вы не зарегистрированы.", show_alert=True)
+            return
+
+        entries = (
+            session.query(Progress)
+            .filter_by(student_id=student.id, type='training')
+            .order_by(Progress.date.desc())
+            .limit(20)
+            .all()
+        )
+        if not entries:
+            await callback.message.edit_text("У вас нет записей о тренировках.")
+            return
+
+        # создаём временный ZIP-файл
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            zip_path = tmp.name
+
+        # пишем в архив
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            index_content = ""
+            for entry in entries:
+                if entry.content:
+                    fname = f"training_{entry.id}.txt"
+                    zipf.writestr(fname, entry.content)
+                elif entry.file_path:
+                    base = os.path.basename(entry.file_path)
+                    fname = f"training_{entry.id}_{base}"
+                    zipf.write(entry.file_path, fname)
+                index_content += (
+                    f"Entry ID: {entry.id}\n"
+                    f"Date: {entry.date}\n"
+                    f"File: {fname}\n\n"
+                )
+            zipf.writestr("index.txt", index_content)
+
+        # отсылаем документ
+        await callback.message.delete()
+        await callback.bot.send_document(
+            chat_id=callback.from_user.id,
+            document=FSInputFile(zip_path, filename="training_history.zip"),
+            caption="Ваша история тренировок"
+        )
+        os.remove(zip_path)
+
+    finally:
+        session.close()
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "view_photo_history")
+async def handle_view_photo_history(callback: types.CallbackQuery):
+    session = Session()
+    try:
+        student = session.query(Student).filter_by(telegram_id=str(callback.from_user.id)).first()
+        if not student:
+            await callback.answer("Вы не зарегистрированы.", show_alert=True)
+            return
+
+        entries = (
+            session.query(Progress)
+            .filter_by(student_id=student.id, type='photo')
+            .order_by(Progress.date.desc())
+            .limit(20)
+            .all()
+        )
+        if not entries:
+            await callback.message.edit_text("У вас нет загруженных фото.")
+            return
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            zip_path = tmp.name
+
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            index_content = ""
+            for entry in entries:
+                if entry.file_path:
+                    base = os.path.basename(entry.file_path)
+                    fname = f"photo_{entry.id}_{base}"
+                    zipf.write(entry.file_path, fname)
+                    index_content += (
+                        f"Entry ID: {entry.id}\n"
+                        f"Date: {entry.date}\n"
+                        f"File: {fname}\n\n"
+                    )
+            zipf.writestr("index.txt", index_content)
+
+        await callback.message.delete()
+        await callback.bot.send_document(
+            chat_id=callback.from_user.id,
+            document=FSInputFile(zip_path, filename="photo_history.zip"),
+            caption="Ваша история фото"
+        )
+        os.remove(zip_path)
+
+    finally:
+        session.close()
+
+    await callback.answer()
+
+@router.callback_query(F.data == "ai_review")
+async def handle_ai_review(callback: types.CallbackQuery):
+    await callback.message.edit_text("Эта функция пока недоступна. Следите за обновлениями!")
+    await callback.answer()
 
 
 @router.message(F.text == "База знаний")
