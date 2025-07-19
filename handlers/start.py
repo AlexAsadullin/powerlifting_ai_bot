@@ -7,7 +7,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types import FSInputFile
 from aiogram.filters import Command
 from database import Session
-from models.models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress
+from models.models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress, KnowledgeBase
 from handlers.admin import is_admin, get_admin_menu
 import os
 import time
@@ -15,13 +15,10 @@ import zipfile
 import tempfile
 from dotenv import load_dotenv
 
-# AI
-
-
 router = Router()
 load_dotenv()
 
-# Добавляем новое состояние для обработки питания
+
 class NutritionStates(StatesGroup):
     waiting_for_nutrition_data = State()
 
@@ -308,7 +305,7 @@ async def handle_nutrition(message: types.Message, state: FSMContext):
     await message.answer("Пожалуйста, отправьте текст, фото или файл с информацией о вашем питании.")
     await state.set_state(NutritionStates.waiting_for_nutrition_data)
 
-# Новая функция для обработки данных о питании
+
 @router.message(NutritionStates.waiting_for_nutrition_data, F.text | F.photo | F.document)
 async def handle_nutrition_data(message: types.Message, state: FSMContext):
     session = Session()
@@ -344,7 +341,7 @@ async def handle_nutrition_data(message: types.Message, state: FSMContext):
     finally:
         session.close()
 
-# Обновляем handle_progress для включения меню выбора действий
+
 @router.message(F.text == "Прогресс")
 async def handle_progress(message: types.Message):
     session = Session()
@@ -356,6 +353,7 @@ async def handle_progress(message: types.Message):
         await message.answer("Выберите действие:", reply_markup=get_progress_menu())
     finally:
         session.close()
+
 
 @router.callback_query(F.data == "upload_training")
 async def handle_upload_training(callback: types.CallbackQuery, state: FSMContext):
@@ -452,7 +450,6 @@ async def handle_view_training_history(callback: types.CallbackQuery):
         if not student:
             await callback.answer("Вы не зарегистрированы.", show_alert=True)
             return
-
         entries = (
             session.query(Progress)
             .filter_by(student_id=student.id, type='training')
@@ -463,12 +460,8 @@ async def handle_view_training_history(callback: types.CallbackQuery):
         if not entries:
             await callback.message.edit_text("У вас нет записей о тренировках.")
             return
-
-        # создаём временный ZIP-файл
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             zip_path = tmp.name
-
-        # пишем в архив
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             index_content = ""
             for entry in entries:
@@ -485,8 +478,6 @@ async def handle_view_training_history(callback: types.CallbackQuery):
                     f"File: {fname}\n\n"
                 )
             zipf.writestr("index.txt", index_content)
-
-        # отсылаем документ
         await callback.message.delete()
         await callback.bot.send_document(
             chat_id=callback.from_user.id,
@@ -494,10 +485,8 @@ async def handle_view_training_history(callback: types.CallbackQuery):
             caption="Ваша история тренировок"
         )
         os.remove(zip_path)
-
     finally:
         session.close()
-
     await callback.answer()
 
 
@@ -509,7 +498,6 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
         if not student:
             await callback.answer("Вы не зарегистрированы.", show_alert=True)
             return
-
         entries = (
             session.query(Progress)
             .filter_by(student_id=student.id, type='photo')
@@ -520,10 +508,8 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
         if not entries:
             await callback.message.edit_text("У вас нет загруженных фото.")
             return
-
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             zip_path = tmp.name
-
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             index_content = ""
             for entry in entries:
@@ -537,7 +523,6 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
                         f"File: {fname}\n\n"
                     )
             zipf.writestr("index.txt", index_content)
-
         await callback.message.delete()
         await callback.bot.send_document(
             chat_id=callback.from_user.id,
@@ -545,10 +530,8 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
             caption="Ваша история фото"
         )
         os.remove(zip_path)
-
     finally:
         session.close()
-
     await callback.answer()
 
 
@@ -564,6 +547,7 @@ async def handle_ai_review(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AIReviewStates.waiting_for_query)
     await callback.answer()
 
+
 @router.callback_query(F.data == "exit_ai_dialogue")
 async def handle_exit_ai_dialogue(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.delete()
@@ -576,7 +560,21 @@ async def handle_exit_ai_dialogue(callback: types.CallbackQuery, state: FSMConte
 async def handle_ai_review_query(message: types.Message, state: FSMContext):
     pass
 
+
 @router.message(F.text == "База знаний")
 async def handle_knowledge_base(message: types.Message):
-    return
-    await message.answer("Вы выбрали: База знаний. Вот полезные материалы для вас...")
+    session = Session()
+    try:
+        materials = session.query(KnowledgeBase).all()
+        if not materials:
+            await message.answer("База знаний пуста.")
+            return
+        for material in materials:
+            if material.type == 'text':
+                await message.answer(material.content)
+            elif material.type == 'file':
+                await message.answer_document(FSInputFile(material.file_path))
+            elif material.type == 'image':
+                await message.answer_photo(FSInputFile(material.file_path))
+    finally:
+        session.close()

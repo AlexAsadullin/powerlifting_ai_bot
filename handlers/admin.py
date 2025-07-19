@@ -4,7 +4,8 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Session
-from models.models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent
+from models.models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent, KnowledgeBase
+import time
 
 router = Router()
 
@@ -14,6 +15,8 @@ class ChangeProgram(StatesGroup):
 class ChangeSchedule(StatesGroup):
     waiting_for_schedule = State()
 
+class AddKnowledge(StatesGroup):
+    waiting_for_material = State()
 
 # Check if user is admin (trainer)
 def is_admin(telegram_id):
@@ -29,12 +32,116 @@ def get_admin_menu():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Просмотреть профили учеников"), KeyboardButton(text="Просмотреть список групп")],
-            [KeyboardButton(text="Создать группу"), KeyboardButton(text="Вернуться в главное меню")],
+            [KeyboardButton(text="Создать группу"), KeyboardButton(text="База знаний")],
+            [KeyboardButton(text="Вернуться в главное меню")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False
     )
     return keyboard
+
+@router.message(F.text == "База знаний")
+async def handle_knowledge_base_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта функция доступна только тренерам.")
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить материалы", callback_data="add_knowledge")],
+        [InlineKeyboardButton(text="Удалить материалы", callback_data="delete_knowledge")]
+    ])
+    await message.answer("Выберите действие:", reply_markup=keyboard)
+
+@router.callback_query(F.data == "add_knowledge")
+async def handle_add_knowledge(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав для этого действия.")
+        return
+    await callback.message.edit_text("Пожалуйста, отправьте материал для базы знаний (текст, файл или изображение).")
+    await state.set_state(AddKnowledge.waiting_for_material)
+    await callback.answer()
+
+@router.message(AddKnowledge.waiting_for_material, F.text | F.document | F.photo)
+async def handle_knowledge_material(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("У вас нет прав для этого действия.")
+        return
+    session = Session()
+    try:
+        knowledge = KnowledgeBase()
+        if message.text:
+            knowledge.type = 'text'
+            knowledge.content = message.text
+        elif message.document:
+            knowledge.type = 'file'
+            file_id = message.document.file_id
+            file = await message.bot.get_file(file_id)
+            file_name = f"{int(time.time())}_{message.document.file_name}"
+            file_path = os.path.join("uploads", "knowledge", file_name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            await message.bot.download_file(file.file_path, file_path)
+            knowledge.file_path = file_path
+        elif message.photo:
+            knowledge.type = 'image'
+            file_id = message.photo[-1].file_id
+            file = await message.bot.get_file(file_id)
+            file_name = f"{int(time.time())}_image.jpg"
+            file_path = os.path.join("uploads", "knowledge", file_name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            await message.bot.download_file(file.file_path, file_path)
+            knowledge.file_path = file_path
+        session.add(knowledge)
+        session.commit()
+        await message.answer("Материал добавлен в базу знаний.", reply_markup=get_admin_menu())
+        await state.clear()
+    finally:
+        session.close()
+
+@router.callback_query(F.data == "delete_knowledge")
+async def handle_delete_knowledge(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав для этого действия.")
+        return
+    session = Session()
+    try:
+        materials = session.query(KnowledgeBase).all()
+        if not materials:
+            await callback.message.edit_text("База знаний пуста.")
+            return
+        buttons = [
+            [InlineKeyboardButton(text=f"ID: {m.id} - {m.type}", callback_data=f"delete_material_{m.id}")]
+            for m in materials
+        ]
+        buttons.append([InlineKeyboardButton(text="Назад", callback_data="back_to_knowledge_menu")])
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text("Выберите материал для удаления:", reply_markup=inline_keyboard)
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("delete_material_"))
+async def handle_delete_material(callback: types.CallbackQuery):
+    material_id = callback.data.split("_")[-1]
+    session = Session()
+    try:
+        material = session.query(KnowledgeBase).filter_by(id=material_id).first()
+        if not material:
+            await callback.answer("Материал не найден.")
+            return
+        session.delete(material)
+        session.commit()
+        await callback.message.edit_text("Материал удален.")
+    finally:
+        session.close()
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_knowledge_menu")
+async def handle_back_to_knowledge_menu(callback: types.CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить материалы", callback_data="add_knowledge")],
+        [InlineKeyboardButton(text="Удалить материалы", callback_data="delete_knowledge")]
+    ])
+    await callback.message.edit_text("Выберите действие:", reply_markup=keyboard)
+    await callback.answer()
 
 @router.message(F.text == "Создать группу")
 async def create_group(message: types.Message, state: FSMContext):
@@ -44,7 +151,6 @@ async def create_group(message: types.Message, state: FSMContext):
     await message.answer("Введите название новой группы:")
     await state.set_state(GroupCreation.waiting_for_name)
 
-# Обработчик ввода названия группы
 @router.message(GroupCreation.waiting_for_name)
 async def handle_group_name(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -96,25 +202,15 @@ async def handle_program_file(message: types.Message, state: FSMContext):
             await message.answer("Ошибка: группа не найдена.")
             await state.clear()
             return
-
-        # Ensure uploads directory exists
         upload_dir = "uploads"
         if not os.path.exists(upload_dir):
             os.makedirs(upload_dir)
-
-        # Generate unique file path
         file_extension = document.file_name.split('.')[-1] if '.' in document.file_name else 'file'
         file_path = os.path.join(upload_dir, f"group_{group_id}_program.{file_extension}")
-
-        # Download and save the file
         file = await message.bot.get_file(document.file_id)
         await message.bot.download_file(file.file_path, file_path)
-
-        # Save file path to group
         group.program_file = file_path
         session.commit()
-
-        # Proceed to student selection
         students = session.query(Student).all()
         if not students:
             await message.answer("Нет зарегистрированных учеников.")
@@ -129,8 +225,6 @@ async def handle_program_file(message: types.Message, state: FSMContext):
     finally:
         session.close()
 
-
-# Обработчик выбора учеников
 @router.callback_query(F.data.startswith("add_student_"))
 async def add_student_to_group(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -154,7 +248,6 @@ async def add_student_to_group(callback: types.CallbackQuery, state: FSMContext)
             await callback.answer("Ошибка: группа или ученик не найдены.")
     finally:
         session.close()
-    # Обновляем список учеников
     students = session.query(Student).all()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"{s.name or 'N/A'} (@{s.username or 'N/A'})", callback_data=f"add_student_{s.telegram_id}")]
@@ -163,7 +256,6 @@ async def add_student_to_group(callback: types.CallbackQuery, state: FSMContext)
     keyboard.inline_keyboard.append([InlineKeyboardButton(text="Завершить выбор", callback_data="finish_selection")])
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
-# Обработчик завершения выбора
 @router.callback_query(F.data == "finish_selection")
 async def finish_selection(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -175,7 +267,6 @@ async def finish_selection(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
     finally:
         session.close()
-
 
 @router.message(F.text == "Формировать расписание")
 async def create_schedule(message: types.Message):
@@ -193,7 +284,6 @@ async def create_schedule(message: types.Message):
     finally:
         session.close()
 
-
 @router.message(F.text == "Просмотреть профили учеников")
 async def view_student_profiles(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -207,18 +297,14 @@ async def view_student_profiles(message: types.Message):
             return
         profiles = []
         for student in students:
-            # Query group_students to find groups for this student
             group_ids = session.query(GroupStudent.group_id).filter_by(student_id=student.id).all()
-            group_ids = [gid[0] for gid in group_ids]  # Extract group IDs
-            # Fetch group names for the group IDs
+            group_ids = [gid[0] for gid in group_ids]
             group_names = ", ".join([g.name for g in session.query(Group).filter(Group.id.in_(group_ids)).all()]) if group_ids else "Нет групп"
             profiles.append(f"ID: {student.telegram_id}, Username: @{student.username or 'N/A'}, Name: {student.name or 'N/A'}, Groups: {group_names}")
         profiles_text = "\n".join(profiles)
         await message.answer(f"Профили учеников:\n{profiles_text}")
     finally:
         session.close()
-
-
 
 @router.message(F.text == "Просмотреть список групп")
 async def view_groups(message: types.Message):
@@ -366,8 +452,6 @@ async def handle_change_program(callback: types.CallbackQuery, state: FSMContext
         session.close()
     await callback.answer()
 
-
-
 @router.callback_query(F.data.startswith("add_students_"))
 async def handle_add_students(callback: types.CallbackQuery):
     group_id = callback.data.split("_")[-1]
@@ -513,7 +597,6 @@ async def handle_change_schedule(callback: types.CallbackQuery, state: FSMContex
         session.close()
     await callback.answer()
 
-# New handler for receiving the new schedule
 @router.message(ChangeSchedule.waiting_for_schedule)
 async def handle_new_schedule(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -548,7 +631,6 @@ async def handle_new_schedule(message: types.Message, state: FSMContext):
         await state.clear()
     finally:
         session.close()
-
 
 @router.message(F.text == "Вернуться в главное меню")
 async def back_to_main_menu(message: types.Message):

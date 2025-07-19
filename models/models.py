@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from database import Base
 from aiogram.fsm.state import State, StatesGroup
 
+
 class Student(Base):
     __tablename__ = 'students'
     id = Column(Integer, primary_key=True)
@@ -13,12 +14,14 @@ class Student(Base):
     remaining_sessions = Column(Integer, default=0)
     payment_requests = relationship("PaymentRequest", back_populates="student")
 
+
 class Trainer(Base):
     __tablename__ = 'trainers'
     id = Column(Integer, primary_key=True)
     telegram_id = Column(String, unique=True, nullable=False)
     username = Column(String, nullable=True)
     name = Column(String, nullable=True)
+
 
 class Group(Base):
     __tablename__ = 'groups'
@@ -30,10 +33,12 @@ class Group(Base):
     trainer = relationship("Trainer")
     students = relationship("Student", secondary="group_students")
 
+
 class GroupStudent(Base):
     __tablename__ = 'group_students'
     group_id = Column(Integer, ForeignKey('groups.id'), primary_key=True)
     student_id = Column(Integer, ForeignKey('students.id'), primary_key=True)
+
 
 class Schedule(Base):
     __tablename__ = 'schedules'
@@ -41,6 +46,7 @@ class Schedule(Base):
     group_id = Column(Integer, ForeignKey('groups.id'))
     content = Column(String, nullable=False)
     group = relationship("Group")
+
 
 class PaymentRequest(Base):
     __tablename__ = 'payment_requests'
@@ -53,6 +59,7 @@ class PaymentRequest(Base):
     updated_at = Column(DateTime, default=datetime.datetime.now)
     student = relationship("Student", back_populates="payment_requests")
 
+
 # Добавляем поддержку типа 'nutrition' в модель Progress
 class Progress(Base):
     __tablename__ = 'progress'
@@ -63,6 +70,16 @@ class Progress(Base):
     file_path = Column(String, nullable=True)  # for files
     date = Column(DateTime, default=datetime.datetime.now)
     student = relationship("Student")
+
+
+class KnowledgeBase(Base):
+    __tablename__ = 'knowledge_base'
+    id = Column(Integer, primary_key=True)
+    type = Column(String, nullable=False)
+    content = Column(String, nullable=True)
+    file_path = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.now)
+
 
 class GroupCreation(StatesGroup):
     waiting_for_name = State()
