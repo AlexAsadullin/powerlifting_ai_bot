@@ -9,11 +9,13 @@ from aiogram.filters import Command
 from database import Session
 from models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress, KnowledgeBase
 from handlers.admin import is_admin, get_admin_menu
+from filters import IsAdmin
 import os
 import time
 import zipfile
 import tempfile
 from dotenv import load_dotenv
+
 
 router = Router()
 load_dotenv()
@@ -561,7 +563,7 @@ async def handle_ai_review_query(message: types.Message, state: FSMContext):
     pass
 
 
-@router.message(F.text == "База знаний")
+@router.message(~IsAdmin(), F.text == "База знаний")
 async def handle_knowledge_base(message: types.Message):
     session = Session()
     try:
