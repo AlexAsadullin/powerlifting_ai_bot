@@ -53,11 +53,12 @@ class PaymentRequest(Base):
     updated_at = Column(DateTime, default=datetime.datetime.now)
     student = relationship("Student", back_populates="payment_requests")
 
+# Добавляем поддержку типа 'nutrition' в модель Progress
 class Progress(Base):
     __tablename__ = 'progress'
     id = Column(Integer, primary_key=True)
     student_id = Column(Integer, ForeignKey('students.id'))
-    type = Column(String, nullable=False)  # 'training' or 'photo'
+    type = Column(String, nullable=False)  # 'training', 'photo' or 'nutrition'
     content = Column(String, nullable=True)  # for text messages
     file_path = Column(String, nullable=True)  # for files
     date = Column(DateTime, default=datetime.datetime.now)

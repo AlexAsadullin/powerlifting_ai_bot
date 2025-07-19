@@ -13,8 +13,21 @@ import os
 import time
 import zipfile
 import tempfile
+from dotenv import load_dotenv
+
+# AI
+
 
 router = Router()
+load_dotenv()
+
+# Добавляем новое состояние для обработки питания
+class NutritionStates(StatesGroup):
+    waiting_for_nutrition_data = State()
+
+
+class AIReviewStates(StatesGroup):
+    waiting_for_query = State()
 
 
 class ProgramSelection(StatesGroup):
@@ -291,14 +304,58 @@ async def handle_program_selection(callback: types.CallbackQuery, state: FSMCont
 
 
 @router.message(F.text == "Питание")
-async def handle_nutrition(message: types.Message):
-    await message.answer("Вы выбрали: Питание. Расскажите больше, чтобы я помог составить рацион.")
+async def handle_nutrition(message: types.Message, state: FSMContext):
+    await message.answer("Пожалуйста, отправьте текст, фото или файл с информацией о вашем питании.")
+    await state.set_state(NutritionStates.waiting_for_nutrition_data)
 
+# Новая функция для обработки данных о питании
+@router.message(NutritionStates.waiting_for_nutrition_data, F.text | F.photo | F.document)
+async def handle_nutrition_data(message: types.Message, state: FSMContext):
+    session = Session()
+    try:
+        student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
+        if not student:
+            await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+            await state.clear()
+            return
+        progress = Progress(student_id=student.id, type='nutrition', date=datetime.datetime.now())
+        if message.text:
+            progress.content = message.text
+        elif message.photo:
+            file_id = message.photo[-1].file_id
+            file = await message.bot.get_file(file_id)
+            file_name = f"{int(time.time())}_nutrition_photo.jpg"
+            file_path = os.path.join("uploads", "nutrition", str(student.id), file_name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            await message.bot.download_file(file.file_path, file_path)
+            progress.file_path = file_path
+        elif message.document:
+            file_id = message.document.file_id
+            file = await message.bot.get_file(file_id)
+            file_name = f"{int(time.time())}_{message.document.file_name}"
+            file_path = os.path.join("uploads", "nutrition", str(student.id), file_name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            await message.bot.download_file(file.file_path, file_path)
+            progress.file_path = file_path
+        session.add(progress)
+        session.commit()
+        await message.answer("Информация о питании сохранена.", reply_markup=get_main_menu())
+        await state.clear()
+    finally:
+        session.close()
 
+# Обновляем handle_progress для включения меню выбора действий
 @router.message(F.text == "Прогресс")
 async def handle_progress(message: types.Message):
-    await message.answer("Выберите действие:", reply_markup=get_progress_menu())
-
+    session = Session()
+    try:
+        student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
+        if not student:
+            await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+            return
+        await message.answer("Выберите действие:", reply_markup=get_progress_menu())
+    finally:
+        session.close()
 
 @router.callback_query(F.data == "upload_training")
 async def handle_upload_training(callback: types.CallbackQuery, state: FSMContext):
@@ -494,12 +551,32 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
 
     await callback.answer()
 
+
 @router.callback_query(F.data == "ai_review")
-async def handle_ai_review(callback: types.CallbackQuery):
-    await callback.message.edit_text("Эта функция пока недоступна. Следите за обновлениями!")
+async def handle_ai_review(callback: types.CallbackQuery, state: FSMContext):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Покинуть диалог с ИИ", callback_data="exit_ai_dialogue")]
+    ])
+    await callback.message.edit_text(
+        "Пожалуйста, опишите ваш запрос для анализа прогресса (например, что вы хотите узнать или улучшить):",
+        reply_markup=keyboard
+    )
+    await state.set_state(AIReviewStates.waiting_for_query)
+    await callback.answer()
+
+@router.callback_query(F.data == "exit_ai_dialogue")
+async def handle_exit_ai_dialogue(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await callback.message.answer("Вы вышли из диалога с ИИ.", reply_markup=get_main_menu())
+    await state.clear()
     await callback.answer()
 
 
+@router.message(AIReviewStates.waiting_for_query, F.text)
+async def handle_ai_review_query(message: types.Message, state: FSMContext):
+    pass
+
 @router.message(F.text == "База знаний")
 async def handle_knowledge_base(message: types.Message):
+    return
     await message.answer("Вы выбрали: База знаний. Вот полезные материалы для вас...")
