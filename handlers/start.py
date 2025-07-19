@@ -7,7 +7,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types import FSInputFile
 from aiogram.filters import Command
 from database import Session
-from models.models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress, KnowledgeBase
+from models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress, KnowledgeBase
 from handlers.admin import is_admin, get_admin_menu
 import os
 import time

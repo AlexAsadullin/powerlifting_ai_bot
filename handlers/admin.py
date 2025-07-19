@@ -4,7 +4,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database import Session
-from models.models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent, KnowledgeBase
+from models import Student, Trainer, Group, Schedule, GroupCreation, GroupStudent, KnowledgeBase
 import time
 
 router = Router()
