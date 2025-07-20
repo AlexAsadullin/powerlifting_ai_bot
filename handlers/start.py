@@ -1,3 +1,4 @@
+import PyPDF2
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -9,13 +10,14 @@ from aiogram.filters import Command
 from database import Session
 from models import Student, GroupStudent, PaymentRequest, Trainer, Group, Schedule, Progress, KnowledgeBase
 from handlers.admin import is_admin, get_admin_menu
+import ai_model
+import asyncio
 from filters import IsAdmin
 import os
 import time
 import zipfile
 import tempfile
 from dotenv import load_dotenv
-
 
 router = Router()
 load_dotenv()
@@ -41,6 +43,30 @@ class PaymentStates(StatesGroup):
 class ProgressStates(StatesGroup):
     waiting_for_training_data = State()
     waiting_for_photo = State()
+
+
+def truncate_text(text, word_limit=200):
+    words = text.split()
+    if len(words) > word_limit:
+        return " ".join(words[:word_limit]) + "..."
+    return text
+
+
+def extract_text_from_file(file_path):
+    try:
+        if file_path.endswith('.txt'):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        elif file_path.endswith('.pdf'):
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+                return text
+        return ""
+    except Exception:
+        return ""
 
 
 def get_main_menu():
@@ -100,18 +126,33 @@ async def handle_trainer_sessions(message: types.Message, state: FSMContext):
         if not student:
             await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
             return
-        await message.answer(f"У вас осталось {student.remaining_sessions} оплаченных занятий.")
+        await message.answer(
+            f"У вас осталось {student.remaining_sessions} оплаченных занятий.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+            ])
+        )
         pending_request = session.query(PaymentRequest).filter_by(student_id=student.id, status='pending').first()
         if pending_request:
             await message.answer(
-                f"Ваш запрос на {pending_request.sessions_requested} занятий находится на рассмотрении.")
+                f"Ваш запрос на {pending_request.sessions_requested} занятий находится на рассмотрении.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+                ])
+            )
         else:
-            await message.answer("Отправьте файл (например, скриншот или документ) с подтверждением оплаты.")
+            await message.answer(
+                "Отправьте файл (например, скриншот или документ) с подтверждением оплаты.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+                ])
+            )
             await state.set_state(PaymentStates.waiting_for_screenshot)
     finally:
         session.close()
 
 
+# Added cancel button to return to main menu
 @router.message(F.photo | F.document, PaymentStates.waiting_for_screenshot)
 async def handle_screenshot(message: types.Message, state: FSMContext):
     file_id = None
@@ -123,10 +164,16 @@ async def handle_screenshot(message: types.Message, state: FSMContext):
         file_id = message.document.file_id
         file_type = 'document'
     await state.update_data(screenshot_file_id=file_id, file_type=file_type)
-    await message.answer("Файл получен. Укажите количество занятий, за которые вы оплатили.")
+    await message.answer(
+        "Файл получен. Укажите количество занятий, за которые вы оплатили.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+        ])
+    )
     await state.set_state(PaymentStates.waiting_for_sessions)
 
 
+# Added cancel button to return to main menu
 @router.message(F.text, PaymentStates.waiting_for_sessions)
 async def handle_sessions(message: types.Message, state: FSMContext):
     try:
@@ -134,7 +181,12 @@ async def handle_sessions(message: types.Message, state: FSMContext):
         if sessions <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("Пожалуйста, введите положительное целое число.")
+        await message.answer(
+            "Пожалуйста, введите положительное целое число.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+            ])
+        )
         return
     data = await state.get_data()
     screenshot_file_id = data.get('screenshot_file_id')
@@ -172,7 +224,7 @@ async def handle_sessions(message: types.Message, state: FSMContext):
                     caption=f"Ученик @{student.username} оплатил {sessions} занятий.",
                     reply_markup=keyboard
                 )
-        await message.answer("Ваш запрос отправлен тренеру на рассмотрение.")
+        await message.answer("Ваш запрос отправлен тренеру на рассмотрение.", reply_markup=get_main_menu())
         await state.clear()
     finally:
         session.close()
@@ -271,8 +323,11 @@ async def handle_training_program(message: types.Message, state: FSMContext):
             await message.answer("Вы не состоите ни в одной группе.")
             return
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=g.name, callback_data=f"select_program_{g.id}")] for g in groups
-        ])
+                                                            [InlineKeyboardButton(text=g.name,
+                                                                                  callback_data=f"select_program_{g.id}")]
+                                                            for g in groups
+                                                        ] + [[InlineKeyboardButton(text="Отмена",
+                                                                                   callback_data="back_to_main")]])
         await message.answer("Выберите группу, чтобы получить программу тренировок:", reply_markup=keyboard)
         await state.set_state(ProgramSelection.waiting_for_group)
     finally:
@@ -304,7 +359,12 @@ async def handle_program_selection(callback: types.CallbackQuery, state: FSMCont
 
 @router.message(F.text == "Питание")
 async def handle_nutrition(message: types.Message, state: FSMContext):
-    await message.answer("Пожалуйста, отправьте текст, фото или файл с информацией о вашем питании.")
+    await message.answer(
+        "Пожалуйста, отправьте текст, фото или файл с информацией о вашем питании.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_main")]
+        ])
+    )
     await state.set_state(NutritionStates.waiting_for_nutrition_data)
 
 
@@ -359,17 +419,33 @@ async def handle_progress(message: types.Message):
 
 @router.callback_query(F.data == "upload_training")
 async def handle_upload_training(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Пожалуйста, отправьте файл или текстовое сообщение с описанием вашей тренировки.")
+    await callback.message.edit_text(
+        "Пожалуйста, отправьте файл или текстовое сообщение с описанием вашей тренировки.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_progress")]
+        ])
+    )
     await state.set_state(ProgressStates.waiting_for_training_data)
     await callback.answer()
 
 
 @router.callback_query(F.data == "upload_photo")
 async def handle_upload_photo(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Пожалуйста, отправьте фото.")
+    await callback.message.edit_text(
+        "Пожалуйста, отправьте фото.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_progress")]
+        ])
+    )
     await state.set_state(ProgressStates.waiting_for_photo)
     await callback.answer()
 
+@router.callback_query(F.data == "back_to_progress")
+async def handle_back_to_progress(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await callback.message.answer("Выберите действие:", reply_markup=get_progress_menu())
+    await state.clear()
+    await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
 async def handle_back_to_main(callback: types.CallbackQuery):
@@ -540,7 +616,7 @@ async def handle_view_photo_history(callback: types.CallbackQuery):
 @router.callback_query(F.data == "ai_review")
 async def handle_ai_review(callback: types.CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Покинуть диалог с ИИ", callback_data="exit_ai_dialogue")]
+        [InlineKeyboardButton(text="Отмена", callback_data="back_to_progress")]
     ])
     await callback.message.edit_text(
         "Пожалуйста, опишите ваш запрос для анализа прогресса (например, что вы хотите узнать или улучшить):",
@@ -558,9 +634,62 @@ async def handle_exit_ai_dialogue(callback: types.CallbackQuery, state: FSMConte
     await callback.answer()
 
 
+# Corrected indentation and completed AI call with proper error handling
 @router.message(AIReviewStates.waiting_for_query, F.text)
 async def handle_ai_review_query(message: types.Message, state: FSMContext):
-    pass
+    session = Session()
+    try:
+        student = session.query(Student).filter_by(telegram_id=str(message.from_user.id)).first()
+        if not student:
+            await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+            await state.clear()
+            return
+
+        training_entries = session.query(Progress).filter_by(student_id=student.id, type='training').order_by(
+            Progress.date.desc()).limit(5).all()
+        nutrition_entries = session.query(Progress).filter_by(student_id=student.id, type='nutrition').order_by(
+            Progress.date.desc()).limit(5).all()
+
+        training_history = "\n".join([
+            f"Training {i + 1} ({entry.date}): {truncate_text(entry.content or extract_text_from_file(entry.file_path))}"
+            for i, entry in enumerate(training_entries)
+        ]) if training_entries else "No recent training data available."
+        nutrition_history = "\n".join([
+            f"Nutrition {i + 1} ({entry.date}): {truncate_text(entry.content or extract_text_from_file(entry.file_path))}"
+            for i, entry in enumerate(nutrition_entries)
+        ]) if nutrition_entries else "No recent nutrition data available."
+
+        knowledge_base_summary = ai_model.get_knowledge_base_summary(word_limit=16380)
+        prompt = f"""
+        Ты - фитнесс-тренер по пауэрлифтингу для подростков, твоя задача - проанализировать базу знаний, историю тренировок и питания ученика и ответить на его вопрос:
+        {knowledge_base_summary}
+        История тренировок:
+        {training_history}
+        История питания:
+        {nutrition_history}
+
+        Запрос от пользователя: {message.text}
+        """
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, ai_model.generate_response, prompt)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад в главное меню", callback_data="back_to_main")]
+        ])
+        await message.answer(response, reply_markup=keyboard)
+        await state.clear()
+
+    except Exception as e:
+        await message.answer(
+            f"Произошла ошибка при обработке запроса: {str(e)}. Пожалуйста, попробуйте снова позже.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_progress")]
+            ])
+        )
+        await state.clear()
+    finally:
+        session.close()
 
 
 @router.message(~IsAdmin(), F.text == "База знаний")
