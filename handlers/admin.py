@@ -81,7 +81,12 @@ async def handle_add_knowledge(callback: types.CallbackQuery, state: FSMContext)
     if not is_admin(callback.from_user.id):
         await callback.answer("У вас нет прав для этого действия.")
         return
-    await callback.message.edit_text("Пожалуйста, отправьте материал для базы знаний (текст, файл или изображение).")
+    await callback.message.edit_text(
+        "Пожалуйста, отправьте материал для базы знаний (текст, файл или изображение).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_knowledge_menu")]
+        ])
+    )
     await state.set_state(AddKnowledge.waiting_for_material)
     await callback.answer()
 
@@ -106,7 +111,7 @@ async def handle_knowledge_material(message: types.Message, state: FSMContext):
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             await message.bot.download_file(file.file_path, file_path)
             knowledge.file_path = file_path
-            knowledge.text_content = extract_text_from_file(file_path)  # Extract text from file
+            knowledge.text_content = extract_text_from_file(file_path)
         elif message.photo:
             knowledge.type = 'image'
             file_id = message.photo[-1].file_id
@@ -119,6 +124,14 @@ async def handle_knowledge_material(message: types.Message, state: FSMContext):
         session.add(knowledge)
         session.commit()
         await message.answer("Материал добавлен в базу знаний.", reply_markup=get_admin_menu())
+        await state.clear()
+    except Exception as e:
+        await message.answer(
+            f"Произошла ошибка при добавлении материала: {str(e)}.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_knowledge_menu")]
+            ])
+        )
         await state.clear()
     finally:
         session.close()
@@ -185,9 +198,13 @@ async def create_group(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("Эта функция доступна только тренерам.")
         return
-    await message.answer("Введите название новой группы:")
+    await message.answer(
+        "Введите название новой группы:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="back_to_admin")]
+        ])
+    )
     await state.set_state(GroupCreation.waiting_for_name)
-
 
 @router.message(GroupCreation.waiting_for_name)
 async def handle_group_name(message: types.Message, state: FSMContext):
@@ -201,7 +218,12 @@ async def handle_group_name(message: types.Message, state: FSMContext):
         session.add(group)
         session.commit()
         await state.update_data(group_id=group.id)
-        await message.answer(f"Группа '{group_name}' создана. Введите расписание в свободной форме:")
+        await message.answer(
+            f"Группа '{group_name}' создана. Введите расписание в свободной форме:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_admin")]
+            ])
+        )
         await state.set_state(GroupCreation.waiting_for_schedule)
     finally:
         session.close()
@@ -213,7 +235,12 @@ async def handle_group_schedule(message: types.Message, state: FSMContext):
         return
     schedule_content = message.text.strip()
     if not schedule_content:
-        await message.answer("Расписание не может быть пустым. Пожалуйста, введите расписание:")
+        await message.answer(
+            "Расписание не может быть пустым. Пожалуйста, введите расписание:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_admin")]
+            ])
+        )
         return
     session = Session()
     try:
@@ -223,10 +250,15 @@ async def handle_group_schedule(message: types.Message, state: FSMContext):
         session.add(schedule)
         session.commit()
         await message.answer(
-            "Расписание сохранено. Теперь загрузите файл с программой тренировок (например, PDF или документ):")
+            "Расписание сохранено. Теперь загрузите файл с программой тренировок (например, PDF или документ):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data="back_to_admin")]
+            ])
+        )
         await state.set_state(GroupCreation.waiting_for_program_file)
     finally:
         session.close()
+
 
 
 @router.message(GroupCreation.waiting_for_program_file, F.document)
@@ -254,14 +286,14 @@ async def handle_program_file(message: types.Message, state: FSMContext):
         session.commit()
         students = session.query(Student).all()
         if not students:
-            await message.answer("Нет зарегистрированных учеников.")
+            await message.answer("Нет зарегистрированных учеников.", reply_markup=get_admin_menu())
             await state.clear()
             return
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"{s.name or 'N/A'} (@{s.username or 'N/A'})",
                                   callback_data=f"add_student_{s.telegram_id}")]
             for s in students
-        ])
+        ] + [[InlineKeyboardButton(text="Отмена", callback_data="back_to_admin")]])
         await message.answer("Файл программы тренировок сохранен. Выберите учеников для добавления:",
                              reply_markup=keyboard)
         await state.set_state(GroupCreation.waiting_for_students)
@@ -504,7 +536,7 @@ async def handle_change_program(callback: types.CallbackQuery, state: FSMContext
         await callback.message.edit_text(
             f"Загрузите новый файл программы тренировок для группы '{group.name}' (например, PDF или документ):",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+                [InlineKeyboardButton(text="Отмена", callback_data=f"edit_group_{group_id}")]
             ])
         )
         await state.set_state(ChangeProgram.waiting_for_program_file)
@@ -656,7 +688,7 @@ async def handle_change_schedule(callback: types.CallbackQuery, state: FSMContex
         await callback.message.edit_text(
             f"Введите новое расписание для группы '{group.name}' в свободной форме:\nТекущее расписание: {current_schedule}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Назад", callback_data=f"edit_group_{group_id}")]
+                [InlineKeyboardButton(text="Отмена", callback_data=f"edit_group_{group_id}")]
             ])
         )
         await state.set_state(ChangeSchedule.waiting_for_schedule)
@@ -673,7 +705,12 @@ async def handle_new_schedule(message: types.Message, state: FSMContext):
         return
     schedule_content = message.text.strip()
     if not schedule_content:
-        await message.answer("Расписание не может быть пустым. Пожалуйста, введите расписание:")
+        await message.answer(
+            "Расписание не может быть пустым. Пожалуйста, введите расписание:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data=f"edit_group_{state.get_data().get('group_id')}")]
+            ])
+        )
         return
     session = Session()
     try:
@@ -701,6 +738,12 @@ async def handle_new_schedule(message: types.Message, state: FSMContext):
     finally:
         session.close()
 
+@router.callback_query(F.data == "back_to_admin")
+async def handle_back_to_admin(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await callback.message.answer("Возвращаемся в главное меню:", reply_markup=get_admin_menu())
+    await state.clear()
+    await callback.answer()
 
 @router.message(F.text == "Вернуться в главное меню")
 async def back_to_main_menu(message: types.Message):
