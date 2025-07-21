@@ -14,7 +14,7 @@
    python.exe main.py
 
 ## Презентация и видео с демонстрацией лежат в облаке
-
+https://drive.google.com/drive/folders/1kOt8R9Aa-5DvWxK-uPWTVB5uYn4LJsmR?usp=sharing
 ---
 
 ## 1. Проблемы и целевая аудитория
