@@ -634,7 +634,7 @@ async def handle_exit_ai_dialogue(callback: types.CallbackQuery, state: FSMConte
     await callback.answer()
 
 
-# Corrected indentation and completed AI call with proper error handling
+# Modified to support continuous AI dialogue without "Continue Dialogue" button
 @router.message(AIReviewStates.waiting_for_query, F.text)
 async def handle_ai_review_query(message: types.Message, state: FSMContext):
     session = Session()
@@ -645,51 +645,62 @@ async def handle_ai_review_query(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        training_entries = session.query(Progress).filter_by(student_id=student.id, type='training').order_by(
-            Progress.date.desc()).limit(5).all()
-        nutrition_entries = session.query(Progress).filter_by(student_id=student.id, type='nutrition').order_by(
-            Progress.date.desc()).limit(5).all()
+        training_entry = session.query(Progress).filter_by(student_id=student.id, type='training').order_by(
+            Progress.date.desc()).first()
+        # Fetch only the most recent nutrition entry
+        nutrition_entry = session.query(Progress).filter_by(student_id=student.id, type='nutrition').order_by(
+            Progress.date.desc()).first()
 
-        training_history = "\n".join([
-            f"Training {i + 1} ({entry.date}): {truncate_text(entry.content or extract_text_from_file(entry.file_path))}"
-            for i, entry in enumerate(training_entries)
-        ]) if training_entries else "No recent training data available."
-        nutrition_history = "\n".join([
-            f"Nutrition {i + 1} ({entry.date}): {truncate_text(entry.content or extract_text_from_file(entry.file_path))}"
-            for i, entry in enumerate(nutrition_entries)
-        ]) if nutrition_entries else "No recent nutrition data available."
+        training_history = (
+            f"Training: {truncate_text(training_entry.content or extract_text_from_file(training_entry.file_path))}"
+            if training_entry else "No data."
+        )
+        nutrition_history = (
+            f"Food: {truncate_text(nutrition_entry.content or extract_text_from_file(nutrition_entry.file_path))}"
+            if nutrition_entry else "No data."
+        )
 
-        knowledge_base_summary = ai_model.get_knowledge_base_summary(word_limit=16380)
-        prompt = f"""
-        Ты - фитнесс-тренер по пауэрлифтингу для подростков, твоя задача - проанализировать базу знаний, историю тренировок и питания ученика и ответить на его вопрос:
-        {knowledge_base_summary}
-        История тренировок:
-        {training_history}
-        История питания:
-        {nutrition_history}
-
-        Запрос от пользователя: {message.text}
-        """
+        knowledge_base_summary = ai_model.get_knowledge_base_summary(word_limit=1000)
 
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, ai_model.generate_response, prompt)
+        response = await loop.run_in_executor(None, ai_model.generate_response, str(training_history), str(nutrition_history), str(knowledge_base_summary), str(message.text), 2**13)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад в прогресс", callback_data="back_to_progress")],
             [InlineKeyboardButton(text="Назад в главное меню", callback_data="back_to_main")]
         ])
-        await message.answer(response, reply_markup=keyboard)
-        await state.clear()
+        await message.answer(
+            f"{response}\n\nВы можете продолжить диалог, отправив еще один запрос, или вернуться в меню.",
+            reply_markup=keyboard
+        )
+        # State is not cleared to allow further queries
 
     except Exception as e:
         await message.answer(
             f"Произошла ошибка при обработке запроса: {str(e)}. Пожалуйста, попробуйте снова позже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Отмена", callback_data="back_to_progress")]
+                [InlineKeyboardButton(text="Назад в прогресс", callback_data="back_to_progress")],
+                [InlineKeyboardButton(text="Назад в главное меню", callback_data="back_to_main")]
             ])
         )
         await state.clear()
     finally:
         session.close()
+
+# Added handler for continuing AI dialogue
+@router.callback_query(F.data == "continue_ai_dialogue")
+async def handle_continue_ai_dialogue(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Назад в прогресс", callback_data="back_to_progress")],
+        [InlineKeyboardButton(text="Назад в главное меню", callback_data="back_to_main")]
+    ])
+    await callback.message.answer(
+        "Отправьте следующий запрос для анализа прогресса:",
+        reply_markup=keyboard
+    )
+    await state.set_state(AIReviewStates.waiting_for_query)
+    await callback.answer()
 
 
 @router.message(~IsAdmin(), F.text == "База знаний")
