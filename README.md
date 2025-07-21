@@ -9,9 +9,11 @@
 2. **Скачайте зависимости**:
    ```bash
    pip install -r requirements.txt
-3. **Запустите бот** - вся настаройка произойдет под капотом:
+3. **Создайте .env** и внесите туда токен из botfather и huggingface по образцу (.env_example)
+4. **Запустите бот** - вся настаройка произойдет под капотом:
    ```bash
    python.exe main.py
+Первый запуск займет время, т.к. нужно скачать ИИ-модель с HuggingFace (выключить VPN)
 
 ## Презентация и видео с демонстрацией лежат в облаке
 https://drive.google.com/drive/folders/1kOt8R9Aa-5DvWxK-uPWTVB5uYn4LJsmR?usp=sharing
