@@ -21,4 +21,6 @@ async def main():
         await bot.session.close()
 
 if __name__ == '__main__':
+    os.makedirs("uploads/knowledge", exist_ok=True)
+    os.makedirs("uploads/progress", exist_ok=True)
     asyncio.run(main())
