@@ -1,0 +1,16 @@
+aiogram
+sqlalchemy
+dotenv
+python-dotenv
+PyPDF2
+transformers
+sentence-transformers
+torch
+scikit-learn
+faiss-cpu
+huggingface_hub
+sentencepiece
+hf_xet
+safetensors
+accelerate
+datasets # to finetune
