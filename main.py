@@ -9,6 +9,7 @@ import asyncio
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+
 async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
@@ -19,6 +20,7 @@ async def main():
         await dp.start_polling(bot, skip_updates=True)
     finally:
         await bot.session.close()
+
 
 if __name__ == '__main__':
     os.makedirs("uploads/knowledge", exist_ok=True)
